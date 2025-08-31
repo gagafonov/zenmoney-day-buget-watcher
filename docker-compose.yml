@@ -1,0 +1,15 @@
+services:
+  app:
+    container_name: budget-watcher
+    image: ruby:3.2.9-alpine3.21
+    env_file:
+      - .env
+    logging:
+      driver: json-file
+      options:
+        max-file: 5
+        max-size: 1m
+    restart: always
+    command: ['/app/app.rb']
+    volumes:
+      - ./app:/app:ro
