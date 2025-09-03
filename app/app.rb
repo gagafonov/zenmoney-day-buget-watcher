@@ -23,31 +23,35 @@ telegramSummaryChatId = ENV.fetch('TELEGRAM_SUMMARY_CHAT_ID')
 telegramWarningsChatId = ENV.fetch('TELEGRAM_WARNINGS_CHAT_ID')
 telegramNoticesChatId = ENV.fetch('TELEGRAM_NOTICES_CHAT_ID')
 
-telegramBalanceNotMathMessageSended = false
+telegramOutcomeNotMathMessageSended = false
 telegramDaySummaryMessageSended = false
 
-lastBalanceFact = 0
+lastTotalOutcomeFact = 0
 
 puts 'App is now running'
 
 while true
   puts 'Check - process'
 
-  todayDay = Date.today.day
   nowTime = Time.now
-  daysInMonth = Date.new(Date.today.year, Date.today.month, -1).day
-  outcomePerDay = (appOutcomeTotal / daysInMonth).to_i
+  todayDate = Date.today
+  todayDay = todayDate.day
+  todayYearMonthStr = todayDate.strftime('%Y-%m')
+  todayDateStr = todayDate.to_date.to_s
+  startTimestamp = (todayDate - todayDate.mday + 1).to_time.to_i
+  endTimestamp = (todayDate.next_day.to_time - 1).to_i
 
-  todayStartTimestamp = Date.today.prev_day.to_time.to_i
-  todayEndTimestamp = (Date.today.next_day.to_time - 1).to_i
+  daysInMonth = Date.new(todayDate.year, todayDate.month, -1).day
+  todayOutcomeCalc = (appOutcomeTotal / daysInMonth).to_i
+  totalOutcomeCalc = todayOutcomeCalc * todayDay
 
   apiJson = Net::HTTP.start(zenMoneyApiUri.host, zenMoneyApiUri.port, :use_ssl => true) { |http|
     apiRequest = Net::HTTP::Post.new(zenMoneyApiUri)
     apiRequest['Authorization'] = "Bearer #{zenMoneyApiToken}"
     apiRequest['Content-Type'] = 'application/json'
     apiRequest.body = {
-      lastServerTimestamp: todayStartTimestamp,
-      currentClientTimestamp: todayEndTimestamp,
+      lastServerTimestamp: startTimestamp,
+      currentClientTimestamp: endTimestamp,
     }.to_json
 
     apiResponse = http.request(apiRequest)
@@ -58,87 +62,85 @@ while true
     end
   }
 
-  if apiJson.key?('account')
-    puts 'Accounts found - process'
+  if apiJson.key?('transaction')
+    outcomeFact = apiJson['transaction']
+      .select {|t| ! t['hold'].nil?}
+      .select {|t| ! t['deleted']}
+      .select {|t| zenMoneyCheckAccounts.include?(t['outcomeAccount'])}
 
-    balanceCalc = if todayDay == daysInMonth
-      0
-    else
-      (appOutcomeTotal - outcomePerDay * todayDay).to_i
-    end
-
-    balanceFact = apiJson['account']
-      .select {|t| zenMoneyCheckAccounts.include?(t['id'])}
-      .sum{|t| t['balance']}
+    totalOutcomeFact = outcomeFact
+      .select {|t| t['date'].match?(/^#{todayYearMonthStr}\-.*$/)}
+      .sum{|t| t['outcome']}
       .to_i
 
-    if balanceCalc >= balanceFact
-      if telegramBalanceNotMathMessageSended
-        puts "Problem - calculated (#{numberFormat(balanceCalc)} rur) and actual (#{numberFormat(balanceFact)} rur) balances do not match!"
+    todayOutcomeFact = outcomeFact
+      .select {|t| t['date'] == todayDateStr}
+      .sum{|t| t['outcome']}
+      .to_i
+
+    if totalOutcomeFact > totalOutcomeCalc
+      if telegramOutcomeNotMathMessageSended
+        puts "Problem - calculated (#{numberFormat(totalOutcomeCalc)} rur) and actual (#{numberFormat(totalOutcomeFact)} rur) total outcomes do not match!"
       else
         telegramMessage = []
-        telegramMessage.push('Внимание: фактический остаток меньше расчетного!')
+        telegramMessage.push('Внимание: фактический расход больше расчетного!')
         telegramMessage.push('')
-        telegramMessage.push("→ Перерасход: #{numberFormat(balanceCalc - balanceFact)}р")
-        telegramMessage.push("→ Фактический остаток: #{numberFormat(balanceFact)}р")
-        telegramMessage.push("→ Расчетный остаток на текущую дату: #{numberFormat(balanceCalc)}р")
+        telegramMessage.push("→ Перерасход: #{numberFormat(totalOutcomeFact - totalOutcomeCalc)}р")
+        telegramMessage.push("→ Фактический расход: #{numberFormat(todayOutcomeFact)}р")
+        telegramMessage.push("→ Расчетный расход: #{numberFormat(todayOutcomeCalc)}р")
 
         telegramResponse = telegramMessageSend(telegramBotId, telegramBotToken, telegramWarningsChatId, telegramMessage.join("\n"))
         if telegramResponse.code.to_i == 200
-          telegramBalanceNotMathMessageSended = true
-          puts 'Balances not match message succesfully sended'
+          telegramOutcomeNotMathMessageSended = true
+          puts 'Outcomes not match message succesfully sended'
         else
           raise "Telegram response returns no 200 code = #{telegramResponse.code}"
         end
       end
     else
-      puts "Everything is fine - calculated (#{numberFormat(balanceCalc)} rur) and actual (#{numberFormat(balanceFact)} rur) balances match"
+      puts "Everything is fine - calculated (#{numberFormat(totalOutcomeCalc)} rur) and actual (#{numberFormat(totalOutcomeFact)} rur) total outcomes match"
     end
 
-    if lastBalanceFact > balanceFact
-      puts 'Actual balance changed - process'
+    if lastTotalOutcomeFact > totalOutcomeFact
+      puts 'Actual outcome changed - process'
 
       telegramMessage = []
-      telegramMessage.push("Изменение фактического остатка: #{numberFormat(lastBalanceFact)}р → #{numberFormat(balanceFact)}р")
-      telegramMessage.push("Сумма, реально доступная для расхода: #{numberFormat(balanceFact - balanceCalc)}р")
+      telegramMessage.push("Изменение суммы расхода: #{numberFormat(lastTotalOutcomeFact)}р → #{numberFormat(totalOutcomeFact)}р")
+      telegramMessage.push("Сумма, реально доступная для расхода: #{numberFormat(totalOutcomeCalc - totalOutcomeFact)}р")
 
       telegramResponse = telegramMessageSend(telegramBotId, telegramBotToken, telegramNoticesChatId, telegramMessage.join("\n"))
       if telegramResponse.code.to_i == 200
-        puts 'Actual balance changed message succesfully sended'
+        puts 'Actual outcome changed message succesfully sended'
       else
         raise "Telegram response returns no 200 code = #{telegramResponse.code}"
       end
-    elsif lastBalanceFact == balanceFact
-      puts 'Actual balance is not changed - skip'
+    elsif lastTotalOutcomeFact == totalOutcomeFact
+      puts 'Actual outcome is not changed - skip'
     end
 
-    if nowTime.hour.to_i == 4 && ! telegramDaySummaryMessageSended
-      puts 'Day summary - process'
-
-      telegramMessage = []
-      telegramMessage.push('Бюджет на день')
-      telegramMessage.push('')
-      telegramMessage.push("→ Расчетная дневная сумма расхода: #{numberFormat(outcomePerDay)}р")
-      telegramMessage.push("→ Сумма, реально доступная для расхода: #{numberFormat(balanceFact - balanceCalc)}р")
-      telegramMessage.push("→ Фактический остаток: #{numberFormat(balanceFact)}р")
-      telegramMessage.push("→ Расчетный остаток на текущую дату: #{numberFormat(balanceCalc)}р")
-
-      telegramResponse = telegramMessageSend(telegramBotId, telegramBotToken, telegramSummaryChatId, telegramMessage.join("\n"))
-      if telegramResponse.code.to_i == 200
-        telegramDaySummaryMessageSended = true
-        puts 'Day summary message succesfully sended'
-      else
-        raise "Telegram response returns no 200 code = #{telegramResponse.code}"
-      end
-    end
-
-    lastBalanceFact = balanceFact
-  else
-    puts 'Account key is not exists - skip'
+    lastTotalOutcomeFact = totalOutcomeFact
   end
 
-  if nowTime.hour.to_i == 0 && nowTime.min.to_i == 30
-    telegramBalanceNotMathMessageSended = false
+  if nowTime.hour.to_i == 4 && ! telegramDaySummaryMessageSended
+    puts 'Day summary - process'
+
+    telegramMessage = []
+    telegramMessage.push('Бюджет на день')
+    telegramMessage.push('')
+    telegramMessage.push("→ Расчетная дневная сумма расхода: #{numberFormat(outcomeCalc)}р")
+    telegramMessage.push("→ Сумма, реально доступная для расхода: #{numberFormat(totalOutcomeCalc - totalOutcomeFact)}р")
+
+    telegramResponse = telegramMessageSend(telegramBotId, telegramBotToken, telegramSummaryChatId, telegramMessage.join("\n"))
+    if telegramResponse.code.to_i == 200
+      telegramDaySummaryMessageSended = true
+      puts 'Day summary message succesfully sended'
+    else
+      raise "Telegram response returns no 200 code = #{telegramResponse.code}"
+    end
+  end
+
+  if nowTime.hour.to_i == 0 && nowTime.min.to_i == 0
+    telegramOutcomeNotMathMessageSended = false
     telegramDaySummaryMessageSended = false
   end
 
