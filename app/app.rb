@@ -101,7 +101,7 @@ while true
       puts "Everything is fine - calculated (#{numberFormat(totalOutcomeCalc)} rur) and actual (#{numberFormat(totalOutcomeFact)} rur) total outcomes match"
     end
 
-    if lastTotalOutcomeFact > totalOutcomeFact
+    if totalOutcomeFact > lastTotalOutcomeFact && lastTotalOutcomeFact > 0
       puts 'Actual outcome changed - process'
 
       telegramMessage = []
