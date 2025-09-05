@@ -127,7 +127,7 @@ while true
     telegramMessage = []
     telegramMessage.push('Бюджет на день')
     telegramMessage.push('')
-    telegramMessage.push("→ Расчетная дневная сумма расхода: #{numberFormat(outcomeCalc)}р")
+    telegramMessage.push("→ Расчетная дневная сумма расхода: #{numberFormat(todayOutcomeCalc)}р")
     telegramMessage.push("→ Сумма, реально доступная для расхода: #{numberFormat(totalOutcomeCalc - totalOutcomeFact)}р")
 
     telegramResponse = telegramMessageSend(telegramBotId, telegramBotToken, telegramSummaryChatId, telegramMessage.join("\n"))
