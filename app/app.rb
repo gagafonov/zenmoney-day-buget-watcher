@@ -10,6 +10,9 @@ require 'uri'
 require_relative 'utils'
 
 appOutcomeTotal = ENV.fetch('APP_OUTCOME_TOTAL').to_i
+appBackupSpendingPlansEnabled = ENV.fetch('APP_BACKUP_SPENDING_PLANS_ENABLED').to_s == 'true'
+appBackupSpendingPlansMessageSendHour = ENV.fetch('APP_BACKUP_SPENDING_PLANS_MESSAGGE_SEND_HOUR').to_i
+appSummaryMessageSendHour = ENV.fetch('APP_SUMMARY_MESSAGE_SEND_HOUR').to_i
 
 zenMoneyApiToken = ENV.fetch('ZENMONEY_API_TOKEN')
 zenMoneyApiUri = URI(ENV.fetch('ZENMONEY_API_URL'))
@@ -25,6 +28,7 @@ telegramNoticesChatId = ENV.fetch('TELEGRAM_NOTICES_CHAT_ID')
 
 telegramOutcomeNotMathMessageSended = false
 telegramDaySummaryMessageSended = false
+telegramReminderMarkerBackupMessageSended = false
 
 lastTotalOutcomeFact = 0
 
@@ -45,7 +49,7 @@ while true
   todayOutcomeCalc = (appOutcomeTotal / daysInMonth).to_i
   totalOutcomeCalc = todayOutcomeCalc * todayDay
 
-  apiJson = Net::HTTP.start(zenMoneyApiUri.host, zenMoneyApiUri.port, :use_ssl => true) { |http|
+  zenMoneyApiJson = Net::HTTP.start(zenMoneyApiUri.host, zenMoneyApiUri.port, :use_ssl => true) { |http|
     apiRequest = Net::HTTP::Post.new(zenMoneyApiUri)
     apiRequest['Authorization'] = "Bearer #{zenMoneyApiToken}"
     apiRequest['Content-Type'] = 'application/json'
@@ -62,8 +66,10 @@ while true
     end
   }
 
-  if apiJson.key?('transaction')
-    outcomeFact = apiJson['transaction']
+  if zenMoneyApiJson.key?('transaction')
+    puts 'Transactions - process'
+
+    outcomeFact = zenMoneyApiJson['transaction']
       .select {|t| ! t['hold'].nil?}
       .select {|t| ! t['deleted']}
       .select {|t| zenMoneyCheckAccounts.include?(t['outcomeAccount'])}
@@ -121,7 +127,7 @@ while true
     lastTotalOutcomeFact = totalOutcomeFact
   end
 
-  if nowTime.hour.to_i == 4 && ! telegramDaySummaryMessageSended
+  if nowTime.hour.to_i == appSummaryMessageSendHour && ! telegramDaySummaryMessageSended
     puts 'Day summary - process'
 
     telegramMessage = []
@@ -142,6 +148,22 @@ while true
   if nowTime.hour.to_i == 0 && nowTime.min.to_i == 0
     telegramOutcomeNotMathMessageSended = false
     telegramDaySummaryMessageSended = false
+    telegramReminderMarkerBackupMessageSended = false
+  end
+
+  if appBackupSpendingPlansEnabled && zenMoneyApiJson.key?('reminderMarker')
+    if nowTime.hour.to_i == appBackupSpendingPlansMessageSendHour && ! telegramReminderMarkerBackupMessageSended
+      puts 'reminderMarker - process'
+
+      telegramMessage = 'Бекап ключа reminderMarker – планов расходов'
+      telegramResponse = telegramJsonSend(telegramBotId, telegramBotToken, telegramNoticesChatId, telegramMessage, JSON.pretty_generate(zenMoneyApiJson['reminderMarker']), 'reminderMarkerBackup.json')
+      if telegramResponse.code.to_i == 200
+        telegramReminderMarkerBackupMessageSended = true
+        puts 'reminderMarker backup message succesfully sended'
+      else
+        raise "Telegram response returns no 200 code = #{telegramResponse.code}"
+      end
+    end
   end
 
   puts "Sleep #{zenMoneyCheckTimeout}s"
