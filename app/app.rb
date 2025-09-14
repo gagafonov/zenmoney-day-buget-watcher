@@ -14,10 +14,11 @@ appBackupSpendingPlansEnabled = ENV.fetch('APP_BACKUP_SPENDING_PLANS_ENABLED').t
 appBackupSpendingPlansMessageSendHour = ENV.fetch('APP_BACKUP_SPENDING_PLANS_MESSAGGE_SEND_HOUR').to_i
 appSummaryMessageSendHour = ENV.fetch('APP_SUMMARY_MESSAGE_SEND_HOUR').to_i
 
-zenMoneyApiToken = ENV.fetch('ZENMONEY_API_TOKEN')
-zenMoneyApiUri = URI(ENV.fetch('ZENMONEY_API_URL'))
-zenMoneyCheckTimeout = ENV.fetch('ZENMONEY_CHECK_TIMEOUT').to_i
-zenMoneyCheckAccounts = ENV.fetch('ZENMONEY_CHECK_ACCOUNTS').strip.split(',')
+zenMoneyApiToken = ENV.fetch('ZENMONEY_API_TOKEN', '')
+zenMoneyApiUri = URI(ENV.fetch('ZENMONEY_API_URL', ''))
+zenMoneyCheckTimeout = ENV.fetch('ZENMONEY_CHECK_TIMEOUT', 60).to_i
+zenMoneyCheckAccounts = ENV.fetch('ZENMONEY_CHECK_ACCOUNTS', '').strip.split(',')
+zenMoneyCheckExcludeIncomeAccounts = ENV.fetch('ZENMONEY_CHECK_EXCLUDE_INCOME_ACCOUNTS', '').strip.split(',')
 
 telegramBotId = ENV.fetch('TELEGRAM_BOT_ID')
 telegramBotToken = ENV.fetch('TELEGRAM_BOT_TOKEN')
@@ -73,6 +74,7 @@ while true
       .select {|t| ! t['hold'].nil?}
       .select {|t| ! t['deleted']}
       .select {|t| zenMoneyCheckAccounts.include?(t['outcomeAccount'])}
+      .select {|t| ! zenMoneyCheckExcludeIncomeAccounts.include?(t['incomeAccount'])}
 
     totalOutcomeFact = outcomeFact
       .select {|t| t['date'].match?(/^#{todayYearMonthStr}\-.*$/)}
