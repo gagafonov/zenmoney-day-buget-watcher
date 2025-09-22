@@ -67,6 +67,17 @@ while true
     end
   }
 
+  plannedOutcome = 0
+  if zenMoneyApiJson.key?('reminderMarker')
+    puts 'Planned - process'
+
+    plannedOutcome = zenMoneyApiJson['reminderMarker']
+      .select{|t| t['date'] == todayDateStr}
+      .select{|t| zenMoneyCheckAccounts.include?(t['outcomeAccount'])}
+      .select{|t| t['state'] == 'planned'}
+      .sum{|t| t['outcome']}
+  end
+
   if zenMoneyApiJson.key?('transaction')
     puts 'Transactions - process'
 
@@ -114,7 +125,11 @@ while true
 
       telegramMessage = []
       telegramMessage.push("Изменение суммы расхода: #{numberFormat(lastTotalOutcomeFact)}р → #{numberFormat(totalOutcomeFact)}р")
-      telegramMessage.push("Сумма, реально доступная для расхода: #{numberFormat(totalOutcomeCalc - totalOutcomeFact)}р")
+      telegramMessage.push("Сумма, реально доступная для расхода: #{numberFormat(totalOutcomeCalc - totalOutcomeFact - plannedOutcome)}р")
+
+      if plannedOutcome > 0
+        telegramMessage.push("Сумма запланированных расходов: #{numberFormat(plannedOutcome)}р")
+      end
 
       telegramResponse = telegramMessageSend(telegramBotId, telegramBotToken, telegramNoticesChatId, telegramMessage.join("\n"))
       if telegramResponse.code.to_i == 200
@@ -136,7 +151,8 @@ while true
     telegramMessage.push('Бюджет на день')
     telegramMessage.push('')
     telegramMessage.push("→ Расчетная дневная сумма расхода: #{numberFormat(todayOutcomeCalc)}р")
-    telegramMessage.push("→ Сумма, реально доступная для расхода: #{numberFormat(totalOutcomeCalc - totalOutcomeFact)}р")
+    telegramMessage.push("→ Сумма запланированных расходов: #{numberFormat(plannedOutcome)}р")
+    telegramMessage.push("→ Сумма, реально доступная для расхода: #{numberFormat(totalOutcomeCalc - totalOutcomeFact - plannedOutcome)}р")
 
     telegramResponse = telegramMessageSend(telegramBotId, telegramBotToken, telegramSummaryChatId, telegramMessage.join("\n"))
     if telegramResponse.code.to_i == 200
