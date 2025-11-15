@@ -9,9 +9,11 @@ require 'uri'
 
 require_relative 'utils'
 
-appOutcomeTotal = ENV.fetch('APP_OUTCOME_TOTAL').to_i
-appBackupSpendingPlansEnabled = ENV.fetch('APP_BACKUP_SPENDING_PLANS_ENABLED').to_s == 'true'
-appBackupSpendingPlansMessageSendHour = ENV.fetch('APP_BACKUP_SPENDING_PLANS_MESSAGGE_SEND_HOUR').to_i
+appOutcomeTotal = ENV.fetch('APP_OUTCOME_TOTAL', 0).to_i
+appOutcomePerDay = ENV.fetch('APP_OUTCOME_PER_DAY', 0).to_i
+
+appBackupSpendingPlansEnabled = ENV.fetch('APP_BACKUP_SPENDING_PLANS_ENABLED', false).to_s == 'true'
+appBackupSpendingPlansMessageSendHour = ENV.fetch('APP_BACKUP_SPENDING_PLANS_MESSAGGE_SEND_HOUR', 0).to_i
 appSummaryMessageSendHour = ENV.fetch('APP_SUMMARY_MESSAGE_SEND_HOUR').to_i
 
 zenMoneyApiToken = ENV.fetch('ZENMONEY_API_TOKEN', '')
@@ -47,7 +49,11 @@ while true
   endTimestamp = (todayDate.next_day.to_time - 1).to_i
 
   daysInMonth = Date.new(todayDate.year, todayDate.month, -1).day
-  todayOutcomeCalc = (appOutcomeTotal / daysInMonth).to_i
+  todayOutcomeCalc = if appOutcomePerDay > 0
+    appOutcomePerDay
+  else
+    (appOutcomeTotal / daysInMonth).to_i
+  end
   totalOutcomeCalc = todayOutcomeCalc * todayDay
 
   begin
