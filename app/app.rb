@@ -46,10 +46,6 @@ puts 'App is now running'
 while true
   puts 'Check - process'
 
-  telegramOutcomeNotMathMessageSended = File.exist?(telegramOutcomeNotMathLockFile)
-  telegramDaySummaryMessageSended = File.exist?(telegramDaySummaryLockFile)
-  telegramReminderMarkerBackupMessageSended = File.exist?(telegramReminderMarkerBackupLockFile)
-
   nowTime = Time.now
   todayDate = Date.today
   todayDay = todayDate.day
@@ -68,6 +64,34 @@ while true
 
   clearAllLocksHour = appClearAllLocksTime.split(':')[0].to_i
   clearAllLocksMinute = appClearAllLocksTime.split(':')[1].to_i
+
+  if nowTime.hour.to_i == clearAllLocksHour
+    if nowTime.min.to_i == clearAllLocksMinute
+      puts 'Clear all locks process'
+
+      if clearAllLocksEnabled
+        FileUtils.rm([
+          telegramOutcomeNotMathLockFile,
+          telegramDaySummaryLockFile,
+          telegramReminderMarkerBackupLockFile
+        ], :force => true)
+
+        clearAllLocksEnabled = false
+
+        puts 'Clear all locks successful'
+      else
+        puts 'Clear all locks skipped (zenmoney check timemout trottling)'
+        sleep zenMoneyCheckTimeout
+        next
+      end
+    elsif nowTime.min.to_i == clearAllLocksMinute + 1
+      clearAllLocksEnabled = true
+    end
+  end
+
+  telegramOutcomeNotMathMessageSended = File.exist?(telegramOutcomeNotMathLockFile)
+  telegramDaySummaryMessageSended = File.exist?(telegramDaySummaryLockFile)
+  telegramReminderMarkerBackupMessageSended = File.exist?(telegramReminderMarkerBackupLockFile)
 
   begin
     zenMoneyApiJson = Net::HTTP.start(zenMoneyApiUri.host, zenMoneyApiUri.port, :use_ssl => true) { |http|
@@ -169,28 +193,6 @@ while true
         puts 'Day summary message succesfully sended'
       else
         puts "Telegram response returns no 200 code: #{telegramResponse.code}"
-      end
-    end
-
-    if nowTime.hour.to_i == clearAllLocksHour
-      if nowTime.min.to_i == clearAllLocksMinute
-        puts 'Clear all locks process'
-
-        if clearAllLocksEnabled
-          FileUtils.rm([
-            telegramOutcomeNotMathLockFile,
-            telegramDaySummaryLockFile,
-            telegramReminderMarkerBackupLockFile
-          ], :force => true)
-
-          clearAllLocksEnabled = false
-
-          puts 'Clear all locks successful'
-        else
-          puts 'Clear all locks skipped (zenmoney check timemout trottling)'
-        end
-      elsif nowTime.min.to_i == clearAllLocksMinute + 1
-        clearAllLocksEnabled = true
       end
     end
 
