@@ -6,6 +6,7 @@ require 'json'
 require 'date'
 require 'net/http'
 require 'uri'
+require 'fileutils'
 
 require_relative 'utils'
 
@@ -15,6 +16,9 @@ appOutcomePerDay = ENV.fetch('APP_OUTCOME_PER_DAY', 0).to_i
 appBackupSpendingPlansEnabled = ENV.fetch('APP_BACKUP_SPENDING_PLANS_ENABLED', false).to_s == 'true'
 appBackupSpendingPlansMessageSendHour = ENV.fetch('APP_BACKUP_SPENDING_PLANS_MESSAGGE_SEND_HOUR', 0).to_i
 appSummaryMessageSendHour = ENV.fetch('APP_SUMMARY_MESSAGE_SEND_HOUR').to_i
+
+appTmpDir = ENV.fetch('APP_TMP_DIR', '/tmp')
+appClearAllLocksTime = ENV.fetch('APP_CLEAR_ALL_LOCKS_TIME', '0:0')
 
 zenMoneyApiToken = ENV.fetch('ZENMONEY_API_TOKEN', '')
 zenMoneyApiUri = URI(ENV.fetch('ZENMONEY_API_URL', ''))
@@ -29,16 +33,22 @@ telegramSummaryChatId = ENV.fetch('TELEGRAM_SUMMARY_CHAT_ID')
 telegramWarningsChatId = ENV.fetch('TELEGRAM_WARNINGS_CHAT_ID')
 telegramNoticesChatId = ENV.fetch('TELEGRAM_NOTICES_CHAT_ID')
 
-telegramOutcomeNotMathMessageSended = false
-telegramDaySummaryMessageSended = false
-telegramReminderMarkerBackupMessageSended = false
+telegramOutcomeNotMathLockFile = "#{appTmpDir}/telegram_outcome_not_math.lock"
+telegramDaySummaryLockFile = "#{appTmpDir}/telegram_day_summary.lock"
+telegramReminderMarkerBackupLockFile = "#{appTmpDir}/telegram_reminder_marker_backup.lock"
 
 lastTotalOutcomeFact = 0
+
+clearAllLocksEnabled = true
 
 puts 'App is now running'
 
 while true
   puts 'Check - process'
+
+  telegramOutcomeNotMathMessageSended = File.exist?(telegramOutcomeNotMathLockFile)
+  telegramDaySummaryMessageSended = File.exist?(telegramDaySummaryLockFile)
+  telegramReminderMarkerBackupMessageSended = File.exist?(telegramReminderMarkerBackupLockFile)
 
   nowTime = Time.now
   todayDate = Date.today
@@ -55,6 +65,9 @@ while true
     (appOutcomeTotal / daysInMonth).to_i
   end
   totalOutcomeCalc = todayOutcomeCalc * todayDay
+
+  clearAllLocksHour = appClearAllLocksTime.split(':')[0].to_i
+  clearAllLocksMinute = appClearAllLocksTime.split(':')[1].to_i
 
   begin
     zenMoneyApiJson = Net::HTTP.start(zenMoneyApiUri.host, zenMoneyApiUri.port, :use_ssl => true) { |http|
@@ -110,7 +123,7 @@ while true
 
           telegramResponse = telegramMessageSend(telegramBotId, telegramBotToken, telegramWarningsChatId, telegramMessage.join("\n"))
           if telegramResponse.code.to_i == 200
-            telegramOutcomeNotMathMessageSended = true
+            FileUtils.touch(telegramOutcomeNotMathLockFile)
             puts 'Outcomes not match message succesfully sended'
           else
             puts "Telegram response returns no 200 code: #{telegramResponse.code}"
@@ -125,6 +138,7 @@ while true
 
         telegramMessage = []
         telegramMessage.push("Изменение суммы расхода: #{numberFormat(lastTotalOutcomeFact)}р → #{numberFormat(totalOutcomeFact)}р")
+        telegramMessage.push("Сумма расхода: #{numberFormat(totalOutcomeFact - lastTotalOutcomeFact)}р")
         telegramMessage.push("Сумма, реально доступная для расхода: #{numberFormat(totalOutcomeCalc - totalOutcomeFact)}р")
 
         telegramResponse = telegramMessageSend(telegramBotId, telegramBotToken, telegramNoticesChatId, telegramMessage.join("\n"))
@@ -151,27 +165,43 @@ while true
 
       telegramResponse = telegramMessageSend(telegramBotId, telegramBotToken, telegramSummaryChatId, telegramMessage.join("\n"))
       if telegramResponse.code.to_i == 200
-        telegramDaySummaryMessageSended = true
+        FileUtils.touch(telegramDaySummaryLockFile)
         puts 'Day summary message succesfully sended'
       else
         puts "Telegram response returns no 200 code: #{telegramResponse.code}"
       end
     end
 
-    if nowTime.hour.to_i == 0 && nowTime.min.to_i == 0
-      telegramOutcomeNotMathMessageSended = false
-      telegramDaySummaryMessageSended = false
-      telegramReminderMarkerBackupMessageSended = false
+    if nowTime.hour.to_i == clearAllLocksHour
+      if nowTime.min.to_i == clearAllLocksMinute
+        puts 'Clear all locks process'
+
+        if clearAllLocksEnabled
+          FileUtils.rm([
+            telegramOutcomeNotMathLockFile,
+            telegramDaySummaryLockFile,
+            telegramReminderMarkerBackupLockFile
+          ], :force => true)
+
+          clearAllLocksEnabled = false
+
+          puts 'Clear all locks successful'
+        else
+          puts 'Clear all locks skipped (zenmoney check timemout trottling)'
+        end
+      elsif nowTime.min.to_i == clearAllLocksMinute + 1
+        clearAllLocksEnabled = true
+      end
     end
 
     if appBackupSpendingPlansEnabled && zenMoneyApiJson.key?('reminder')
       if nowTime.hour.to_i == appBackupSpendingPlansMessageSendHour && ! telegramReminderMarkerBackupMessageSended
         puts 'reminder - process'
 
-        telegramMessage = 'Бекап ключа reminder – планов расходов'
+        telegramMessage = 'Бекап ключа reminder - планов расходов'
         telegramResponse = telegramJsonSend(telegramBotId, telegramBotToken, telegramNoticesChatId, telegramMessage, JSON.pretty_generate(zenMoneyApiJson['reminder']), 'reminderBackup.json')
         if telegramResponse.code.to_i == 200
-          telegramReminderMarkerBackupMessageSended = true
+          FileUtils.touch(telegramReminderMarkerBackupLockFile)
           puts 'Reminder backup message succesfully sended'
         else
           puts "Telegram response returns no 200 code: #{telegramResponse.code}"

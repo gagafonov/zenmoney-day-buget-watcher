@@ -13,3 +13,8 @@ services:
     command: ['/app/app.rb']
     volumes:
       - ./app:/app:ro
+      - data:$APP_TMP_DIR
+
+volumes:
+  data:
+    driver: local
