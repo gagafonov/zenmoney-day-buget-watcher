@@ -64,7 +64,6 @@ while true
 
   clearAllLocksHour = appClearAllLocksTime.split(':')[0].to_i
   clearAllLocksMinute = appClearAllLocksTime.split(':')[1].to_i
-
   if nowTime.hour.to_i == clearAllLocksHour
     if nowTime.min.to_i == clearAllLocksMinute
       puts 'Clear all locks process'
