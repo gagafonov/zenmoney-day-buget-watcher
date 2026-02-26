@@ -10,8 +10,10 @@ require 'fileutils'
 
 require_relative 'utils'
 
-appOutcomeTotal = ENV.fetch('APP_OUTCOME_TOTAL', 0).to_i
-appOutcomePerDay = ENV.fetch('APP_OUTCOME_PER_DAY', 0).to_i
+appDebug = ENV.fetch('APP_DEBUG', false).to_s == 'true'
+
+appOutcomeTotalSum = ENV.fetch('APP_OUTCOME_TOTAL', 0).to_i
+appOutcomePerDaySum = ENV.fetch('APP_OUTCOME_PER_DAY', 0).to_i
 
 appBackupSpendingPlansEnabled = ENV.fetch('APP_BACKUP_SPENDING_PLANS_ENABLED', false).to_s == 'true'
 appBackupSpendingPlansMessageSendHour = ENV.fetch('APP_BACKUP_SPENDING_PLANS_MESSAGGE_SEND_HOUR', 0).to_i
@@ -25,6 +27,7 @@ zenMoneyApiUri = URI(ENV.fetch('ZENMONEY_API_URL', ''))
 zenMoneyCheckTimeout = ENV.fetch('ZENMONEY_CHECK_TIMEOUT', 60).to_i
 zenMoneyCheckAccounts = ENV.fetch('ZENMONEY_CHECK_ACCOUNTS', '').strip.split(',')
 zenMoneyCheckExcludeIncomeAccounts = ENV.fetch('ZENMONEY_CHECK_EXCLUDE_INCOME_ACCOUNTS', '').strip.split(',')
+zenMoneyCheckIncludeOffsettingOutcomeAccounts = ENV.fetch('ZENMONEY_CHECK_INCLUDE_OFFSETTING_OUTCOME_ACCOUNTS', '').strip.split(',')
 
 telegramBotId = ENV.fetch('TELEGRAM_BOT_ID')
 telegramBotToken = ENV.fetch('TELEGRAM_BOT_TOKEN')
@@ -37,11 +40,17 @@ telegramOutcomeNotMathLockFile = "#{appTmpDir}/telegram_outcome_not_math.lock"
 telegramDaySummaryLockFile = "#{appTmpDir}/telegram_day_summary.lock"
 telegramReminderMarkerBackupLockFile = "#{appTmpDir}/telegram_reminder_marker_backup.lock"
 
-lastTotalOutcomeFact = 0
+lastTotalOutcomeFactSum = 0
 
 clearAllLocksEnabled = true
 
 puts 'App is now running'
+if appDebug
+  appDebugMessage = 'App is in debug mode - no messages will be sended to telegram, but all processes will be emulated and logs will be printed'
+  puts '='*appDebugMessage.length
+  puts appDebugMessage
+  puts '='*appDebugMessage.length
+end
 
 while true
   puts 'Check - process'
@@ -55,12 +64,12 @@ while true
   endTimestamp = (todayDate.next_day.to_time - 1).to_i
 
   daysInMonth = Date.new(todayDate.year, todayDate.month, -1).day
-  todayOutcomeCalc = if appOutcomePerDay > 0
-    appOutcomePerDay
+  todayOutcomeCalcSum = if appOutcomePerDaySum > 0
+    appOutcomePerDaySum
   else
-    (appOutcomeTotal / daysInMonth).to_i
+    (appOutcomeTotalSum / daysInMonth).to_i
   end
-  totalOutcomeCalc = todayOutcomeCalc * todayDay
+  totalOutcomeCalcSum = todayOutcomeCalcSum * todayDay
 
   clearAllLocksHour = appClearAllLocksTime.split(':')[0].to_i
   clearAllLocksMinute = appClearAllLocksTime.split(':')[1].to_i
@@ -117,32 +126,52 @@ while true
     if zenMoneyApiJson.key?('transaction')
       puts 'Transactions - process'
 
-      outcomeFact = zenMoneyApiJson['transaction']
+      monthTransactions = zenMoneyApiJson['transaction']
         .select {|t| ! t['hold'].nil?}
         .select {|t| ! t['deleted']}
-        .select {|t| zenMoneyCheckAccounts.include?(t['outcomeAccount'])}
-        .select {|t| ! zenMoneyCheckExcludeIncomeAccounts.include?(t['incomeAccount'])}
-
-      totalOutcomeFact = outcomeFact
         .select {|t| t['date'].match?(/^#{todayYearMonthStr}\-.*$/)}
+
+      offsettingTransactions = monthTransactions
+        .group_by {|t| t['date']}
+        .flat_map {|date, dayTransactions|
+          dayTransactions
+            .group_by {|t| t['outcome']}
+            .select {|amount, amountTransactions|
+              amountTransactions.any? {|t| zenMoneyCheckAccounts.include?(t['outcomeAccount'])} &&
+              amountTransactions.any? {|t| zenMoneyCheckIncludeOffsettingOutcomeAccounts.include?(t['outcomeAccount'])}
+            }
+            .values
+            .flatten(1)
+        }
+
+      puts "offsettingTransactions: #{JSON.pretty_generate(offsettingTransactions)}" if appDebug
+
+      outcomeFact = monthTransactions
+        # включить только транзакции, которые относятся к проверяемым счетам, так как только они влияют на сумму, доступную для расхода
+        .select {|t| zenMoneyCheckAccounts.include?(t['outcomeAccount'])}
+        # исключить переводы на эти счета из расходов, так как они не уменьшают сумму, доступную для расхода, а просто переводят ее между счетами
+        .select {|t| ! zenMoneyCheckExcludeIncomeAccounts.include?(t['incomeAccount'])}
+        .reject{|t| offsettingTransactions.include?(t)}
+
+      totalOutcomeFactSum = outcomeFact
         .sum{|t| t['outcome']}
         .to_i
 
-      todayOutcomeFact = outcomeFact
+      todayOutcomeFactSum = outcomeFact
         .select {|t| t['date'] == todayDateStr}
         .sum{|t| t['outcome']}
         .to_i
 
-      if totalOutcomeFact > totalOutcomeCalc
+      if totalOutcomeFactSum > totalOutcomeCalcSum
         if telegramOutcomeNotMathMessageSended
-          puts "Problem - calculated (#{numberFormat(totalOutcomeCalc)} rur) and actual (#{numberFormat(totalOutcomeFact)} rur) total outcomes do not match!"
+          puts "Problem - calculated (#{numberFormat(totalOutcomeCalcSum)} rur) and actual (#{numberFormat(totalOutcomeFactSum)} rur) total outcomes do not match!"
         else
           telegramMessage = []
           telegramMessage.push('Внимание: фактический расход больше расчетного!')
           telegramMessage.push('')
-          telegramMessage.push("→ Перерасход: #{numberFormat(totalOutcomeFact - totalOutcomeCalc)}р")
-          telegramMessage.push("→ Фактический расход: #{numberFormat(todayOutcomeFact)}р")
-          telegramMessage.push("→ Расчетный расход: #{numberFormat(todayOutcomeCalc)}р")
+          telegramMessage.push("→ Перерасход: #{numberFormat(totalOutcomeFactSum - totalOutcomeCalcSum)}р")
+          telegramMessage.push("→ Фактический расход: #{numberFormat(todayOutcomeFactSum)}р")
+          telegramMessage.push("→ Расчетный расход: #{numberFormat(todayOutcomeCalcSum)}р")
 
           telegramResponse = telegramMessageSend(telegramBotId, telegramBotToken, telegramWarningsChatId, telegramMessage.join("\n"))
           if telegramResponse.code.to_i == 200
@@ -153,28 +182,33 @@ while true
           end
         end
       else
-        puts "Everything is fine - calculated (#{numberFormat(totalOutcomeCalc)} rur) and actual (#{numberFormat(totalOutcomeFact)} rur) total outcomes match"
+        puts "Everything is fine - calculated (#{numberFormat(totalOutcomeCalcSum)} rur) and actual (#{numberFormat(totalOutcomeFactSum)} rur) total outcomes match"
       end
 
-      if totalOutcomeFact > lastTotalOutcomeFact && lastTotalOutcomeFact > 0
+      if totalOutcomeFactSum > lastTotalOutcomeFactSum && lastTotalOutcomeFactSum > 0
         puts 'Actual outcome changed - process'
 
         telegramMessage = []
-        telegramMessage.push("Изменение суммы расхода: #{numberFormat(lastTotalOutcomeFact)}р → #{numberFormat(totalOutcomeFact)}р")
-        telegramMessage.push("Сумма расхода: #{numberFormat(totalOutcomeFact - lastTotalOutcomeFact)}р")
-        telegramMessage.push("Сумма, реально доступная для расхода: #{numberFormat(totalOutcomeCalc - totalOutcomeFact)}р")
+        telegramMessage.push("Изменение суммы расхода: #{numberFormat(lastTotalOutcomeFactSum)}р → #{numberFormat(totalOutcomeFactSum)}р")
+        telegramMessage.push("Сумма расхода: #{numberFormat(totalOutcomeFactSum - lastTotalOutcomeFactSum)}р")
+        telegramMessage.push("Сумма, реально доступная для расхода: #{numberFormat(totalOutcomeCalcSum - totalOutcomeFactSum)}р")
 
-        telegramResponse = telegramMessageSend(telegramBotId, telegramBotToken, telegramNoticesChatId, telegramMessage.join("\n"))
-        if telegramResponse.code.to_i == 200
-          puts 'Actual outcome changed message succesfully sended'
+        if appDebug
+          puts 'Actual outcome changed message:'
+          puts telegramMessage.join("\n")
         else
-          puts "Telegram response returns no 200 code: #{telegramResponse.code}"
+          telegramResponse = telegramMessageSend(telegramBotId, telegramBotToken, telegramNoticesChatId, telegramMessage.join("\n"))
+          if telegramResponse.code.to_i == 200
+            puts 'Actual outcome changed message succesfully sended'
+          else
+            puts "Telegram response returns no 200 code: #{telegramResponse.code}"
+          end
         end
-      elsif lastTotalOutcomeFact == totalOutcomeFact
+      elsif lastTotalOutcomeFactSum == totalOutcomeFactSum
         puts 'Actual outcome is not changed - skip'
       end
 
-      lastTotalOutcomeFact = totalOutcomeFact
+      lastTotalOutcomeFactSum = totalOutcomeFactSum
     end
 
     if nowTime.hour.to_i == appSummaryMessageSendHour && ! telegramDaySummaryMessageSended
@@ -183,15 +217,20 @@ while true
       telegramMessage = []
       telegramMessage.push('Бюджет на день')
       telegramMessage.push('')
-      telegramMessage.push("→ Расчетная дневная сумма расхода: #{numberFormat(todayOutcomeCalc)}р")
-      telegramMessage.push("→ Сумма, реально доступная для расхода: #{numberFormat(totalOutcomeCalc - totalOutcomeFact)}р")
+      telegramMessage.push("→ Расчетная дневная сумма расхода: #{numberFormat(todayOutcomeCalcSum)}р")
+      telegramMessage.push("→ Сумма, реально доступная для расхода: #{numberFormat(totalOutcomeCalcSum - totalOutcomeFactSum)}р")
 
-      telegramResponse = telegramMessageSend(telegramBotId, telegramBotToken, telegramSummaryChatId, telegramMessage.join("\n"))
-      if telegramResponse.code.to_i == 200
-        FileUtils.touch(telegramDaySummaryLockFile)
-        puts 'Day summary message succesfully sended'
+      if appDebug
+        puts 'Day summary message:'
+        puts telegramMessage.join("\n")
       else
-        puts "Telegram response returns no 200 code: #{telegramResponse.code}"
+        telegramResponse = telegramMessageSend(telegramBotId, telegramBotToken, telegramSummaryChatId, telegramMessage.join("\n"))
+        if telegramResponse.code.to_i == 200
+          FileUtils.touch(telegramDaySummaryLockFile)
+          puts 'Day summary message succesfully sended'
+        else
+          puts "Telegram response returns no 200 code: #{telegramResponse.code}"
+        end
       end
     end
 
@@ -199,13 +238,15 @@ while true
       if nowTime.hour.to_i == appBackupSpendingPlansMessageSendHour && ! telegramReminderMarkerBackupMessageSended
         puts 'reminder - process'
 
-        telegramMessage = 'Бекап ключа reminder - планов расходов'
-        telegramResponse = telegramJsonSend(telegramBotId, telegramBotToken, telegramNoticesChatId, telegramMessage, JSON.pretty_generate(zenMoneyApiJson['reminder']), 'reminderBackup.json')
-        if telegramResponse.code.to_i == 200
-          FileUtils.touch(telegramReminderMarkerBackupLockFile)
-          puts 'Reminder backup message succesfully sended'
-        else
-          puts "Telegram response returns no 200 code: #{telegramResponse.code}"
+        unless appDebug
+          telegramMessage = 'Бекап ключа reminder - планов расходов'
+          telegramResponse = telegramJsonSend(telegramBotId, telegramBotToken, telegramNoticesChatId, telegramMessage, JSON.pretty_generate(zenMoneyApiJson['reminder']), 'reminderBackup.json')
+          if telegramResponse.code.to_i == 200
+            FileUtils.touch(telegramReminderMarkerBackupLockFile)
+            puts 'Reminder backup message succesfully sended'
+          else
+            puts "Telegram response returns no 200 code: #{telegramResponse.code}"
+          end
         end
       end
     end
